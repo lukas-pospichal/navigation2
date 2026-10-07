@@ -15,6 +15,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cmath>
 #include <string>
 #include <memory>
 #include <utility>
@@ -94,25 +95,51 @@ bool ConstrainedSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Durat
     return true;
   }
 
+  // An in-place rotation is a run of poses with the same position. The optimizer cannot handle
+  // zero-length segments, so only one pose of each run is optimized (the one whose orientation
+  // matches the motion: the last one, or the first one for a run at the goal) and the others are
+  // re-inserted around its smoothed position afterwards.
+  const auto same_position = [&path](size_t a, size_t b) {
+      const auto & pa = path.poses[a].pose.position;
+      const auto & pb = path.poses[b].pose.position;
+      return std::hypot(pa.x - pb.x, pa.y - pb.y) < 1e-4;
+    };
+  std::vector<size_t> anchors;  // indices into path.poses of the poses to optimize
+  std::vector<std::pair<size_t, size_t>> runs;  // [first, last] of each anchor's run
+  size_t run_start = 0;
+  while (run_start < path.poses.size()) {
+    size_t run_end = run_start;
+    while (run_end + 1 < path.poses.size() && same_position(run_end, run_end + 1)) {
+      run_end++;
+    }
+    const bool at_goal = run_end == path.poses.size() - 1 && run_start > 0;
+    anchors.push_back(at_goal ? run_start : run_end);
+    runs.emplace_back(run_start, run_end);
+    run_start = run_end + 1;
+  }
+  if (anchors.size() < 2) {
+    return true;
+  }
+
   // populate smoother input with (x, y, forward/reverse dir)
   std::vector<Eigen::Vector3d> path_world;
-  path_world.reserve(path.poses.size());
+  path_world.reserve(anchors.size());
   // smoother keeps record of start/end orientations so that it
   // can use them in the final path, preventing degradation of these (often important) values
   Eigen::Vector2d start_dir;
   Eigen::Vector2d end_dir;
-  for (size_t i = 0; i < path.poses.size(); i++) {
-    auto & pose = path.poses[i].pose;
+  for (size_t i = 0; i < anchors.size(); i++) {
+    auto & pose = path.poses[anchors[i]].pose;
     double angle = tf2::getYaw(pose.orientation);
     Eigen::Vector2d orientation(cos(angle), sin(angle));
-    if (i == path.poses.size() - 1) {
+    if (i == anchors.size() - 1) {
       // Note: `reversing` indicates the direction of the segment after the point and
       // there is no segment after the last point. Most probably the value is irrelevant, but
       // copying it from the last but one point, just to make it defined...
       path_world.emplace_back(pose.position.x, pose.position.y, path_world.back()[2]);
       end_dir = orientation;
     } else {
-      auto & pos_next = path.poses[i + 1].pose.position;
+      auto & pos_next = path.poses[anchors[i + 1]].pose.position;
       Eigen::Vector2d mvmt(pos_next.x - pose.position.x, pos_next.y - pose.position.y);
       // robot is considered reversing when angle between its orientation and movement direction
       // is more than 90 degrees (i.e. dot product is less than 0)
@@ -147,15 +174,35 @@ bool ConstrainedSmoother::smooth(nav_msgs::msg::Path & path, const rclcpp::Durat
   // populate final path
   geometry_msgs::msg::PoseStamped pose;
   pose.header = path.poses.front().header;
+  std::vector<geometry_msgs::msg::PoseStamped> rotation_poses = std::move(path.poses);
   path.poses.clear();
-  path.poses.reserve(path_world.size());
-  for (auto & pw : path_world) {
+  path.poses.reserve(path_world.size() + rotation_poses.size() - anchors.size());
+  // the optimizer outputs path_upsampling_factor poses per segment, anchor k is at index k * factor
+  const size_t upsampling = std::max(1, smoother_params_.path_upsampling_factor);
+  for (size_t j = 0; j < path_world.size(); j++) {
+    const auto & pw = path_world[j];
     pose.pose.position.x = pw[0];
     pose.pose.position.y = pw[1];
     pose.pose.orientation.z = sin(pw[2] / 2);
     pose.pose.orientation.w = cos(pw[2] / 2);
 
+    if (j % upsampling != 0) {
+      path.poses.push_back(pose);
+      continue;
+    }
+    const auto [first, last] = runs[j / upsampling];
+    const bool at_goal = anchors[j / upsampling] == first;  // rotation poses follow the anchor
+    for (size_t r = first; r < last && !at_goal; r++) {
+      pose.pose.orientation = rotation_poses[r].pose.orientation;
+      path.poses.push_back(pose);
+    }
+    pose.pose.orientation.z = sin(pw[2] / 2);
+    pose.pose.orientation.w = cos(pw[2] / 2);
     path.poses.push_back(pose);
+    for (size_t r = first + 1; r <= last && at_goal; r++) {
+      pose.pose.orientation = rotation_poses[r].pose.orientation;
+      path.poses.push_back(pose);
+    }
   }
 
   return true;
