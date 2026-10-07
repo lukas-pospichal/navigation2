@@ -1062,6 +1062,49 @@ TEST_F(SmootherTest, testingStartGoalOrientations)
   EXPECT_NEAR(adjusted_path.front()[2], M_PI * 0.75, 0.001);
 }
 
+TEST_F(SmootherTest, testingInPlaceRotations)
+{
+  node_lifecycle_->set_parameter(rclcpp::Parameter("SmoothPath.w_dist", 30.0));
+  reloadParams();
+
+  // forward, then reverse (cusp at x = 0.5), then rotate in place to face +y, then forward
+  std::vector<Eigen::Vector3d> input;
+  for (int i = 0; i <= 5; i++) {
+    input.emplace_back(0.1 * i, 3.0, 0.0);
+  }
+  for (int i = 4; i >= 2; i--) {
+    input.emplace_back(0.1 * i, 3.0, 0.0);
+  }
+  const size_t rotation_first = input.size();
+  input.emplace_back(0.2, 3.0, 0.0);
+  input.emplace_back(0.2, 3.0, M_PI / 6);
+  input.emplace_back(0.2, 3.0, M_PI / 3);
+  input.emplace_back(0.2, 3.0, M_PI / 2);
+  const size_t rotation_last = input.size() - 1;
+  for (int i = 1; i <= 5; i++) {
+    input.emplace_back(0.2, 3.0 + 0.1 * i, M_PI / 2);
+  }
+
+  std::vector<Eigen::Vector3d> output;
+  ASSERT_TRUE(smoothPath(input, output));
+  ASSERT_EQ(output.size(), input.size());
+
+  for (const auto & p : output) {
+    EXPECT_TRUE(p.allFinite());
+  }
+  // the rotation keeps its position (all poses of the run share it) and its yaws
+  for (size_t i = rotation_first; i <= rotation_last; i++) {
+    EXPECT_NEAR(output[i].x(), output[rotation_first].x(), 1e-6);
+    EXPECT_NEAR(output[i].y(), output[rotation_first].y(), 1e-6);
+  }
+  EXPECT_NEAR(output[rotation_first].z(), 0.0, 1e-6);
+  EXPECT_NEAR(output[rotation_first + 1].z(), M_PI / 6, 1e-6);
+  EXPECT_NEAR(output[rotation_first + 2].z(), M_PI / 3, 1e-6);
+  // the rotation stays near where the original path rotated
+  EXPECT_NEAR(output[rotation_first].x(), 0.2, 0.1);
+  EXPECT_NEAR(output[rotation_first].y(), 3.0, 0.1);
+}
+
 TEST_F(SmootherTest, testingCostCheckPointsParamValidity)
 {
   node_lifecycle_->set_parameter(
