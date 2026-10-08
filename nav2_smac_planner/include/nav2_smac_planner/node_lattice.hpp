@@ -16,6 +16,7 @@
 #define NAV2_SMAC_PLANNER__NODE_LATTICE_HPP_
 
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <vector>
@@ -382,6 +383,8 @@ public:
 
   NodeLattice * parent;
   Coordinates pose;
+  // Unquantized heading in radians of a node placed by analytic expansion, NaN otherwise
+  float analytic_yaw{std::numeric_limits<float>::quiet_NaN()};
 
 private:
   float _cell_cost;
