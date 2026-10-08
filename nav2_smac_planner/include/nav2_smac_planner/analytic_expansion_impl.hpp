@@ -270,7 +270,7 @@ typename AnalyticExpansion<NodeT>::AnalyticExpansionNodes AnalyticExpansion<Node
         next->setPose(proposed_coordinates);
         if (next->isNodeValid(_traverse_unknown, _collision_checker) && next != prev) {
           // Save the node, and its previous coordinates in case we need to abort
-          possible_nodes.add(next, initial_node_coords, proposed_coordinates);
+          possible_nodes.add(next, initial_node_coords, proposed_coordinates, theta);
           node_costs.emplace_back(next->getCost());
           prev = next;
         } else {
@@ -466,6 +466,10 @@ typename AnalyticExpansion<NodeT>::NodePtr AnalyticExpansion<NodeT>::setAnalytic
         }
         n->parent = prev;
         n->pose = node_pose.proposed_coords;
+        if constexpr (std::is_base_of_v<NodeLattice, NodeT>) {
+          // pose.theta is a heading bin, keep the true heading for the output path
+          n->analytic_yaw = node_pose.yaw;
+        }
         n->visited();
         prev = n;
       }

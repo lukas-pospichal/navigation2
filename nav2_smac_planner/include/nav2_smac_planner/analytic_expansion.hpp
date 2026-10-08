@@ -55,16 +55,19 @@ public:
     AnalyticExpansionNode(
       NodePtr & node_in,
       Coordinates & initial_coords_in,
-      Coordinates & proposed_coords_in)
+      Coordinates & proposed_coords_in,
+      double yaw_in)
     : node(node_in),
       initial_coords(initial_coords_in),
-      proposed_coords(proposed_coords_in)
+      proposed_coords(proposed_coords_in),
+      yaw(yaw_in)
     {
     }
 
     NodePtr node;
     Coordinates initial_coords;
     Coordinates proposed_coords;
+    double yaw;  // Unquantized heading of the analytic path in [0, 2PI) radians
   };
 
   /**
@@ -81,9 +84,10 @@ public:
     void add(
       NodePtr & node,
       Coordinates & initial_coords,
-      Coordinates & proposed_coords)
+      Coordinates & proposed_coords,
+      double yaw)
     {
-      nodes.emplace_back(node, initial_coords, proposed_coords);
+      nodes.emplace_back(node, initial_coords, proposed_coords, yaw);
     }
 
     void setDirectionChanges(int changes)

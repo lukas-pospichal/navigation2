@@ -214,6 +214,7 @@ void NodeLattice::reset()
   pose.x = 0.0f;
   pose.y = 0.0f;
   pose.theta = 0.0f;
+  analytic_yaw = std::numeric_limits<float>::quiet_NaN();
   _motion_primitive = nullptr;
   _backwards = false;
   _is_node_valid = false;
@@ -515,7 +516,8 @@ void NodeLattice::addNodeToPath(
   } else {
     // For analytic expansion nodes where there is no valid motion primitive
     path.push_back(current_node->pose);
-    path.back().theta = _ctx->motion_table.getAngleFromBin(path.back().theta);
+    path.back().theta = std::isnan(current_node->analytic_yaw) ?
+      _ctx->motion_table.getAngleFromBin(path.back().theta) : current_node->analytic_yaw;
   }
 }
 

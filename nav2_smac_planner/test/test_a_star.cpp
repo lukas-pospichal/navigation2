@@ -13,12 +13,15 @@
 // limitations under the License. Reserved.
 
 #include <math.h>
+#include <algorithm>
+#include <array>
 #include <memory>
 #include <unordered_map>
 #include <string>
 #include <vector>
 #include <limits>
 
+#include "angles/angles.h"
 #include "gtest/gtest.h"
 #include "rclcpp/utilities.hpp"
 #include "nav2_costmap_2d/costmap_2d.hpp"
@@ -417,6 +420,75 @@ TEST(AStarTest, test_a_star_lattice)
   // no skipped nodes
   for (unsigned int i = 1; i != path.size(); i++) {
     EXPECT_LT(hypotf(path[i].x - path[i - 1].x, path[i].y - path[i - 1].y), 2.1f);
+  }
+
+  delete costmapA;
+}
+
+TEST(AStarTest, test_a_star_lattice_shortcut_headings)
+{
+  auto lnode = std::make_shared<nav2::LifecycleNode>("test");
+  nav2_smac_planner::SearchInfo info;
+  info.change_penalty = 0.05;
+  info.non_straight_penalty = 1.05;
+  info.reverse_penalty = 2.0;
+  info.retrospective_penalty = 0.1;
+  info.analytic_expansion_ratio = 3.5;
+  info.lattice_filepath =
+    nav2::get_package_share_directory("nav2_smac_planner") +
+    "/sample_primitives/5cm_resolution/0.5m_turning_radius/ackermann" +
+    "/output.json";
+  info.minimum_turning_radius = 8;  // in grid coordinates 0.4/0.05
+  info.analytic_expansion_max_length = 40.0;  // in grid coordinates
+  unsigned int size_theta = 16;
+  info.cost_penalty = 2.0;
+
+  nav2_costmap_2d::Costmap2D * costmapA =
+    new nav2_costmap_2d::Costmap2D(100, 100, 0.05, 0.0, 0.0, 0);
+  auto costmap_ros = std::make_shared<nav2_costmap_2d::Costmap2DROS>();
+  costmap_ros->on_configure(rclcpp_lifecycle::State());
+  auto costmap = costmap_ros->getCostmap();
+  *costmap = *costmapA;
+
+  std::unique_ptr<nav2_smac_planner::GridCollisionChecker> checker =
+    std::make_unique<nav2_smac_planner::GridCollisionChecker>(costmap_ros, size_theta, lnode);
+  checker->setFootprint(nav2_costmap_2d::Footprint(), true, 0.0);
+
+  auto dummy_cancel_checker = []() {
+      return false;
+    };
+
+  // Goals whose shortcut runs between heading bins: the pose headings have to follow the
+  // direction of motion, not the nearest bin
+  const std::vector<std::array<unsigned int, 3>> goals = {
+    {30u, 13u, 4u}, {35u, 20u, 4u}, {30u, 25u, 4u}, {35u, 15u, 0u}, {32u, 22u, 2u}};
+  for (const auto & goal : goals) {
+    nav2_smac_planner::AStarAlgorithm<nav2_smac_planner::NodeLattice> a_star(
+      nav2_smac_planner::MotionModel::STATE_LATTICE, info);
+    int max_iterations = 10000;
+    a_star.initialize(
+      false, max_iterations, std::numeric_limits<int>::max(), 5000, 120.0, 401, size_theta);
+    a_star.setCollisionChecker(checker.get());
+    a_star.setStart(5u, 5u, 0u);
+    a_star.setGoal(goal[0], goal[1], goal[2]);
+    nav2_smac_planner::NodeLattice::CoordinateVector path;
+    int num_it = 0;
+    ASSERT_TRUE(a_star.createPath(path, num_it, 10.0, dummy_cancel_checker));
+    ASSERT_GT(path.size(), 3u);
+
+    // path is goal to start
+    for (unsigned int i = 1; i + 1 < path.size(); i++) {
+      const float dx = path[i - 1].x - path[i + 1].x;
+      const float dy = path[i - 1].y - path[i + 1].y;
+      if (hypotf(dx, dy) < 0.5f) {
+        continue;
+      }
+      // A reversing segment is labelled with the robot heading, so compare modulo PI
+      const float err = fabs(angles::shortest_angular_distance(path[i].theta, atan2(dy, dx)));
+      EXPECT_LT(std::min(err, static_cast<float>(M_PI) - err), 0.1f) <<
+        "goal " << goal[0] << " " << goal[1] << " " << goal[2] << " pose " << i <<
+        " heading " << path[i].theta << " motion " << atan2(dy, dx);
+    }
   }
 
   delete costmapA;
